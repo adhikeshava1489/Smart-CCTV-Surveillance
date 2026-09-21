@@ -1,0 +1,39 @@
+# ==========================================
+# Git Ignore - Smart CCTV Surveillance
+# ==========================================
+
+# 1. Large Datasets (Do NOT push GBs of video/image data to Git)
+datasets/raw/
+datasets/processed/images/
+datasets/processed/labels/
+datasets/drive_archives/
+*.mp4
+*.avi
+*.mkv
+*.jpg
+*.png
+*.jpeg
+*.zip
+*.tar
+*.gz
+
+# 2. Training runs & Model Checkpoints
+runs/
+models/trained/
+*.pt
+*.onnx
+
+# 3. Python cache & Virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+*.log
+
+# 4. IDE & System files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

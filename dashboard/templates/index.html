@@ -1,0 +1,649 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart CCTV Surveillance - Operations Center</title>
+    <style>
+        :root {
+            --bg: #090d16;
+            --card: #121826;
+            --card-hover: #172134;
+            --border: #1f2c42;
+            --border-glow: #2d4163;
+            --text: #f0f4f8;
+            --muted: #8292aa;
+            --red: #ff2a44;
+            --red-glow: rgba(255, 42, 68, 0.4);
+            --green: #00e676;
+            --green-glow: rgba(0, 230, 118, 0.3);
+            --orange: #ff9100;
+            --blue: #2979ff;
+            --purple: #d500f9;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+        body { background: var(--bg); color: var(--text); padding: 18px; min-height: 100vh; }
+
+        /* Top Header */
+        header { 
+            display: flex; justify-content: space-between; align-items: center; 
+            padding-bottom: 16px; border-bottom: 1px solid var(--border); margin-bottom: 18px;
+            background: linear-gradient(180deg, rgba(18,24,38,0.6) 0%, transparent 100%);
+        }
+        .logo-area { display: flex; align-items: center; gap: 14px; }
+        .logo-icon { 
+            width: 40px; height: 40px; background: linear-gradient(135deg, #ff2a44 0%, #b3001e 100%);
+            border-radius: 10px; display: flex; align-items: center; justify-content: center; 
+            font-size: 22px; box-shadow: 0 0 20px var(--red-glow); 
+        }
+        h1 { font-size: 20px; font-weight: 800; letter-spacing: 0.6px; }
+        .subtitle { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+        .header-actions { display: flex; gap: 12px; align-items: center; }
+        button, .btn { 
+            background: var(--card); color: var(--text); border: 1px solid var(--border); 
+            padding: 9px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; 
+            cursor: pointer; transition: all 0.25s ease; display: inline-flex; align-items: center; 
+            gap: 8px; text-decoration: none; box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+        }
+        button:hover, .btn:hover { background: var(--card-hover); border-color: var(--border-glow); transform: translateY(-1px); }
+        .btn-red { background: rgba(255,42,68,0.15); color: var(--red); border-color: rgba(255,42,68,0.4); }
+        .btn-red:hover { background: rgba(255,42,68,0.25); box-shadow: 0 0 15px var(--red-glow); }
+        .btn-green { background: rgba(0,230,118,0.15); color: var(--green); border-color: rgba(0,230,118,0.4); }
+        .btn-green:hover { background: rgba(0,230,118,0.25); box-shadow: 0 0 15px var(--green-glow); }
+
+        /* Flashing HUD Alert Banner */
+        #alert-banner { 
+            display: none; padding: 14px 20px; border-radius: 10px; margin-bottom: 18px; 
+            font-weight: 800; font-size: 15px; letter-spacing: 0.6px; 
+            animation: pulseRed 1.1s infinite alternate; border: 1px solid rgba(255,255,255,0.2);
+        }
+        @keyframes pulseRed {
+            0% { background: rgba(255,42,68,0.9); box-shadow: 0 0 15px rgba(255,42,68,0.6); }
+            100% { background: rgba(160,8,25,0.95); box-shadow: 0 0 35px rgba(255,42,68,0.9); }
+        }
+
+        /* 7 Threat Matrix Badges */
+        .threat-matrix { display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; }
+        .threat-pill { 
+            padding: 8px 14px; border-radius: 20px; font-size: 12px; font-weight: 700; 
+            background: var(--card); border: 1px solid var(--border); color: var(--muted); 
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); display: flex; align-items: center; gap: 6px;
+        }
+        .threat-pill.active { 
+            background: var(--red); color: white; border-color: var(--red); 
+            box-shadow: 0 0 16px var(--red-glow); transform: scale(1.05); 
+        }
+
+        /* Layout */
+        .dashboard-layout { display: grid; grid-template-columns: 2.6fr 1fr; gap: 20px; }
+
+        /* Camera Grid Wall */
+        .camera-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 18px; }
+        .cam-card { 
+            background: var(--card); border: 1px solid var(--border); border-radius: 12px; 
+            overflow: hidden; position: relative; transition: all 0.3s ease; 
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+        .cam-card.threat-active { 
+            border-color: var(--red); 
+            box-shadow: 0 0 25px var(--red-glow); 
+            animation: cardAlertPulse 1.2s infinite alternate;
+        }
+        @keyframes cardAlertPulse {
+            0% { border-color: rgba(255,42,68,0.5); }
+            100% { border-color: rgba(255,42,68,1.0); }
+        }
+        .cam-header { 
+            display: flex; justify-content: space-between; align-items: center; 
+            padding: 10px 16px; background: rgba(0,0,0,0.4); border-bottom: 1px solid var(--border); 
+            font-size: 13px; font-weight: 700;
+        }
+        .badge { font-size: 10px; font-weight: 800; padding: 4px 10px; border-radius: 6px; text-transform: uppercase; letter-spacing: 0.5px; }
+        .badge-live { background: rgba(0,230,118,0.2); color: var(--green); border: 1px solid var(--green); }
+        .badge-recorded { background: rgba(255,145,0,0.2); color: var(--orange); border: 1px solid var(--orange); }
+        .cam-stream { width: 100%; height: auto; min-height: 240px; display: block; background: #000; object-fit: contain; }
+
+        /* Sidebar Panels */
+        .sidebar-card { 
+            background: var(--card); border: 1px solid var(--border); border-radius: 12px; 
+            padding: 18px; margin-bottom: 18px; box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+        }
+        .card-title { 
+            font-size: 13px; font-weight: 800; margin-bottom: 14px; color: var(--text); 
+            border-bottom: 1px solid var(--border); padding-bottom: 8px; text-transform: uppercase;
+            letter-spacing: 0.8px; display: flex; align-items: center; justify-content: space-between;
+        }
+        .input-group { margin-bottom: 12px; }
+        .input-group label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 5px; text-transform: uppercase; font-weight: 700; }
+        input[type="text"], input[type="file"] { 
+            width: 100%; background: var(--bg); border: 1px solid var(--border); 
+            color: var(--text); padding: 9px 12px; border-radius: 8px; font-size: 12px; 
+            transition: border 0.2s;
+        }
+        input[type="text"]:focus { outline: none; border-color: var(--blue); }
+
+        /* Incident Table */
+        .incident-table-wrap { max-height: 380px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; }
+        table { width: 100%; border-collapse: collapse; font-size: 12px; text-align: left; }
+        th { background: rgba(0,0,0,0.5); padding: 10px 12px; color: var(--muted); font-weight: 700; position: sticky; top: 0; z-index: 2; }
+        td { padding: 9px 12px; border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+        .threat-tag { font-weight: 800; color: var(--red); display: inline-flex; align-items: center; gap: 4px; }
+
+        /* =========================================================================
+           CRITICAL THREAT EMERGENCY MODAL (High-Priority Alert Popup)
+           ========================================================================= */
+        #serious-threat-modal {
+            display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+            background: rgba(0, 0, 0, 0.75); backdrop-filter: blur(8px);
+            z-index: 9999; justify-content: center; align-items: center;
+        }
+        .modal-box {
+            width: 90%; max-width: 520px; background: #131a29; border: 2px solid var(--red);
+            border-radius: 14px; box-shadow: 0 0 50px rgba(255, 42, 68, 0.6);
+            overflow: hidden; animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+        @keyframes popIn {
+            0% { transform: scale(0.85); opacity: 0; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        .modal-header {
+            background: linear-gradient(135deg, #ff2a44 0%, #a10a1f 100%);
+            padding: 16px 20px; color: white; display: flex; align-items: center; gap: 12px;
+        }
+        .modal-header h2 { font-size: 17px; font-weight: 800; letter-spacing: 0.5px; }
+        .modal-body { padding: 22px 20px; font-size: 13px; line-height: 1.6; }
+        .alert-detail-grid {
+            display: grid; grid-template-columns: 1fr 1fr; gap: 10px; background: var(--bg);
+            padding: 14px; border-radius: 8px; border: 1px solid var(--border); margin: 14px 0;
+        }
+        .detail-item { font-size: 12px; }
+        .detail-label { color: var(--muted); text-transform: uppercase; font-size: 10px; font-weight: 700; margin-bottom: 2px; }
+        .detail-val { font-weight: 700; color: var(--text); }
+        .modal-footer {
+            padding: 14px 20px; background: rgba(0,0,0,0.3); border-top: 1px solid var(--border);
+            display: flex; justify-content: flex-end; gap: 12px;
+        }
+
+        /* Toast Notifications Container */
+        #toast-container { position: fixed; top: 20px; right: 20px; z-index: 9998; display: flex; flex-direction: column; gap: 10px; }
+        .toast {
+            background: #141b2a; border-left: 4px solid var(--red); color: var(--text);
+            padding: 12px 18px; border-radius: 8px; box-shadow: 0 6px 18px rgba(0,0,0,0.5);
+            font-size: 12px; min-width: 280px; display: flex; align-items: center; justify-content: space-between;
+            animation: slideIn 0.3s ease; border-top: 1px solid var(--border); border-right: 1px solid var(--border); border-bottom: 1px solid var(--border);
+        }
+        @keyframes slideIn { 0% { transform: translateX(50px); opacity: 0; } 100% { transform: translateX(0); opacity: 1; } }
+    </style>
+</head>
+<body>
+
+    <!-- Top Header -->
+    <header>
+        <div class="logo-area">
+            <div class="logo-icon">🛡️</div>
+            <div>
+                <h1>SMART CCTV SURVEILLANCE OPERATIONS</h1>
+                <div class="subtitle">Multi-Camera AI Incident Detection • 7 Real-Time Threat Channels</div>
+            </div>
+        </div>
+        <div class="header-actions">
+            <button id="siren-btn" onclick="toggleSiren()">🔔 Audio Siren: ON</button>
+            <a href="/api/export_report" class="btn btn-green">📥 Export Incident Report (CSV)</a>
+        </div>
+    </header>
+
+    <!-- Flashing HUD Alert Banner (Triggers exclusively on LIVE camera threats) -->
+    <div id="alert-banner">
+        🚨 LIVE EMERGENCY ALERT: <span id="alert-text">NONE</span>
+    </div>
+
+    <!-- 7 Threat Matrix Status Badges -->
+    <div class="threat-matrix">
+        <div class="threat-pill" id="pill-WEAPON">🔫 WEAPONS</div>
+        <div class="threat-pill" id="pill-FIRE">🔥 FIRE</div>
+        <div class="threat-pill" id="pill-SMOKE">💨 SMOKE</div>
+        <div class="threat-pill" id="pill-FALL">⚠️ PERSON FALLEN</div>
+        <div class="threat-pill" id="pill-VIOLENCE">🥊 VIOLENCE / FIGHTS</div>
+        <div class="threat-pill" id="pill-THEFT">💰 THEFT / SHOPLIFTING</div>
+        <div class="threat-pill" id="pill-INTRUSION">🛑 INTRUSION / BREACH</div>
+    </div>
+
+    <!-- Main Dashboard Layout -->
+    <div class="dashboard-layout">
+
+        <!-- Left: Multi-Camera Video Wall -->
+        <div>
+            <div class="camera-grid" id="camera-grid">
+                {% for cam in cameras %}
+                <div class="cam-card" id="card-{{ cam.camera_id }}">
+                    <div class="cam-header">
+                        <div>{{ cam.name }}</div>
+                        <div style="display: flex; gap: 8px; align-items: center;">
+                            <span class="badge badge-{{ cam.mode }}">{{ cam.mode }}</span>
+                            <button onclick="removeCamera('{{ cam.camera_id }}')" style="padding: 2px 6px; font-size: 11px;">✕</button>
+                        </div>
+                    </div>
+                    <img class="cam-stream" src="/video_feed/{{ cam.camera_id }}" alt="{{ cam.name }}">
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <!-- Right: Control Sidebar & Incident History -->
+        <div>
+            <!-- Add Camera / Video Source -->
+            <div class="sidebar-card">
+                <div class="card-title">ADD SURVEILLANCE FEED</div>
+                
+                <!-- Connect Live Webcam -->
+                <div style="margin-bottom: 14px;">
+                    <button class="btn btn-green" style="width: 100%; justify-content: center;" onclick="connectWebcam()">
+                        🔴 Connect Live Webcam / Camera
+                    </button>
+                </div>
+
+                <!-- Upload Video File -->
+                <div class="input-group">
+                    <label>Upload Recorded Video (.mp4):</label>
+                    <input type="file" id="video-file-input" accept="video/mp4,video/avi" onchange="uploadVideoFile()">
+                </div>
+
+                <!-- RTSP / IP Camera -->
+                <div class="input-group">
+                    <label>Or Connect IP Camera / RTSP URL:</label>
+                    <input type="text" id="rtsp-url-input" placeholder="rtsp://192.168.1.100:554/stream">
+                </div>
+                <button style="width: 100%; justify-content: center;" onclick="connectRTSP()">Connect Stream</button>
+            </div>
+
+            <!-- Incident Event Log -->
+            <div class="sidebar-card">
+                <div class="card-title">
+                    <span>TIMESTAMPTED INCIDENT LOG</span>
+                    <span id="log-count" style="font-size: 11px; color: var(--muted); font-weight: normal;">0 events</span>
+                </div>
+                <div class="incident-table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Time</th>
+                                <th>Camera</th>
+                                <th>Threat</th>
+                                <th>Timecode</th>
+                            </tr>
+                        </thead>
+                        <tbody id="incident-tbody">
+                            <tr><td colspan="4" style="text-align: center; color: var(--muted); padding: 18px;">No incidents logged yet.</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- Toast Container -->
+    <div id="toast-container"></div>
+
+    <!-- =========================================================================
+         CRITICAL THREAT EMERGENCY MODAL
+         ========================================================================= -->
+    <div id="serious-threat-modal">
+        <div class="modal-box">
+            <div class="modal-header">
+                <div style="font-size: 24px;">🚨</div>
+                <div>
+                    <h2 id="modal-threat-title">CRITICAL SECURITY ALERT</h2>
+                    <div style="font-size: 11px; opacity: 0.9;">HIGH-PRIORITY THREAT REQUIRING IMMEDIATE RESPONSE</div>
+                </div>
+            </div>
+            <div class="modal-body">
+                <p id="modal-threat-desc" style="color: var(--text); font-weight: 500;">
+                    A critical threat has been detected in the surveillance area.
+                </p>
+                <div class="alert-detail-grid">
+                    <div class="detail-item">
+                        <div class="detail-label">Threat Category</div>
+                        <div class="detail-val" id="modal-detail-threat" style="color: var(--red);">WEAPON</div>
+                    </div>
+                    <div class="detail-item">
+                        <div class="detail-label">Camera Feed</div>
+                        <div class="detail-val" id="modal-detail-cam">Cam 1</div>
+                    </div>
+                    <div class="detail-item">
+                        <div class="detail-label">Timestamp</div>
+                        <div class="detail-val" id="modal-detail-time">--:--:--</div>
+                    </div>
+                    <div class="detail-item">
+                        <div class="detail-label">Severity Level</div>
+                        <div class="detail-val" style="color: var(--red);">LEVEL 1 (EMERGENCY)</div>
+                    </div>
+                </div>
+                <div style="background: rgba(255,42,68,0.1); border: 1px dashed var(--red); padding: 10px; border-radius: 6px; font-size: 11px; color: #ff8a98;">
+                    <strong>Notice:</strong> This incident has been recorded in the permanent security audit log with timestamps and video timecode.
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn" onclick="dismissEmergencyModal()">Acknowledge & Silence</button>
+                <button class="btn btn-red" id="modal-action-btn" onclick="triggerSecurityDispatch()">Dispatch Security</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- =========================================================================
+         MODULAR JAVASCRIPT ALERT & SEVERITY MANAGER
+         ========================================================================= -->
+    <script>
+        // =========================================================================
+        // 1. THREAT SEVERITY CONFIGURATION (Easily edit rules & messages here)
+        // =========================================================================
+        const THREAT_CONFIG = {
+            // --- SERIOUS / CRITICAL THREATS (Triggers Emergency Modal Popup & Siren) ---
+            "WEAPON": {
+                isSerious: true,
+                severity: "CRITICAL",
+                title: "LETHAL WEAPON DETECTED",
+                message: "A firearm, handgun, rifle, or blade has been recognized in the surveillance stream. Immediate security response is mandated.",
+                actionText: "🚨 DISPATCH ARMED SECURITY",
+                color: "#ff2a44"
+            },
+            "FIRE": {
+                isSerious: true,
+                severity: "CRITICAL",
+                title: "ACTIVE FIRE OUTBREAK",
+                message: "Active flames detected in the facility. High danger of structural spread. Initiate fire safety protocol.",
+                actionText: "🚒 CALL FIRE DEPARTMENT",
+                color: "#ff5252"
+            },
+            "VIOLENCE": {
+                isSerious: true,
+                severity: "CRITICAL",
+                title: "PHYSICAL VIOLENCE / ASSAULT",
+                message: "A physical struggle, brawl, or altercation between individuals is currently occurring.",
+                actionText: "👮 DISPATCH SECURITY PATROL",
+                color: "#ff2a44"
+            },
+            // --- HIGH PRIORITY WARNINGS (Triggers Toast Notification & Timeline Record) ---
+            "INTRUSION": {
+                isSerious: true, // Set to true if you want intrusion to also trigger the modal
+                severity: "HIGH",
+                title: "PERIMETER INTRUSION BREACH",
+                message: "An unauthorized person has crossed into the restricted perimeter security zone.",
+                actionText: "🔒 LOCKDOWN ZONE",
+                color: "#ff9100"
+            },
+            "FALL": {
+                isSerious: false,
+                severity: "HIGH",
+                title: "PERSON COLLAPSED / FALLEN",
+                message: "An individual has fallen or collapsed on the ground. Medical check recommended.",
+                actionText: "🏥 REQUEST MEDICAL FIRST AID",
+                color: "#d500f9"
+            },
+            "THEFT": {
+                isSerious: false,
+                severity: "MEDIUM",
+                title: "THEFT / SHOPLIFTING DETECTED",
+                message: "Suspicious item concealment or counter theft activity detected.",
+                actionText: "📹 REVIEW TIMECODE",
+                color: "#ffd600"
+            },
+            "SMOKE": {
+                isSerious: false,
+                severity: "MEDIUM",
+                title: "SMOKE PLUME DETECTED",
+                message: "Smoke haze visible. Possible early smoldering before open flame.",
+                actionText: "💨 INSPECT DUCTS",
+                color: "#b388ff"
+            }
+        };
+
+        // Modal Cooldown Tracker (Prevents annoying repeated popups for the same incident)
+        let lastModalDismissTime = 0;
+        const MODAL_COOLDOWN_MS = 20000; // 20 seconds cooldown between emergency popups
+
+        // External Dispatch Hook (You can easily edit this function to connect to SMS, Telegram, or Webhooks)
+        function onSeriousThreatAlert(threatKey, cameraName, timeStr) {
+            console.log(`[ALERT HOOK] Serious Threat Detected: ${threatKey} on ${cameraName} at ${timeStr}`);
+            // Example: fetch('/api/send_sms_alert', { method: 'POST', body: JSON.stringify({ threat: threatKey }) });
+        }
+
+        // =========================================================================
+        // 2. EMERGENCY MODAL CONTROLLER
+        // =========================================================================
+        function showEmergencyModal(threatKey, cameraName, timeStr) {
+            let now = Date.now();
+            if (now - lastModalDismissTime < MODAL_COOLDOWN_MS) return;
+
+            let config = THREAT_CONFIG[threatKey] || {
+                title: threatKey + " DETECTED",
+                message: "A security threat has been flagged by the AI engine.",
+                actionText: "ACKNOWLEDGE"
+            };
+
+            document.getElementById('modal-threat-title').innerText = config.title;
+            document.getElementById('modal-threat-desc').innerText = config.message;
+            document.getElementById('modal-detail-threat').innerText = threatKey;
+            document.getElementById('modal-detail-cam').innerText = cameraName || "Primary Feed";
+            document.getElementById('modal-detail-time').innerText = timeStr || new Date().toLocaleTimeString();
+            document.getElementById('modal-action-btn').innerText = config.actionText;
+
+            let modal = document.getElementById('serious-threat-modal');
+            modal.style.display = 'flex';
+
+            // Trigger hook
+            onSeriousThreatAlert(threatKey, cameraName, timeStr);
+        }
+
+        function dismissEmergencyModal() {
+            document.getElementById('serious-threat-modal').style.display = 'none';
+            lastModalDismissTime = Date.now();
+            stopSiren();
+        }
+
+        function triggerSecurityDispatch() {
+            let threat = document.getElementById('modal-detail-threat').innerText;
+            alert(`🚨 SECURITY DISPATCH CONFIRMED: Patrol dispatched for ${threat}.`);
+            dismissEmergencyModal();
+        }
+
+        // Toast Notification System
+        function showToast(threatKey, cameraName) {
+            let container = document.getElementById('toast-container');
+            let config = THREAT_CONFIG[threatKey] || { title: threatKey, color: "#ff2a44" };
+
+            let toast = document.createElement('div');
+            toast.className = 'toast';
+            toast.style.borderLeftColor = config.color;
+            toast.innerHTML = `
+                <div>
+                    <div style="font-weight: 700; color: ${config.color};">${config.title}</div>
+                    <div style="font-size: 11px; color: var(--muted);">${cameraName} • ${new Date().toLocaleTimeString()}</div>
+                </div>
+                <button onclick="this.parentElement.remove()" style="padding: 2px 6px; font-size: 10px; margin-left: 10px;">✕</button>
+            `;
+            container.appendChild(toast);
+            setTimeout(() => { toast.remove(); }, 5000);
+        }
+
+        // =========================================================================
+        // 3. AUDIO SIREN ALARM SYNTHESIZER
+        // =========================================================================
+        let audioCtx = null;
+        let sirenOsc = null;
+        let sirenEnabled = true;
+        let sirenPlaying = false;
+
+        function toggleSiren() {
+            sirenEnabled = !sirenEnabled;
+            document.getElementById('siren-btn').innerText = sirenEnabled ? "🔔 Audio Siren: ON" : "🔕 Audio Siren: MUTED";
+            if (!sirenEnabled && sirenPlaying) stopSiren();
+        }
+
+        function playSiren() {
+            if (!sirenEnabled || sirenPlaying) return;
+            try {
+                if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                sirenOsc = audioCtx.createOscillator();
+                let gain = audioCtx.createGain();
+                sirenOsc.type = "sawtooth";
+                sirenOsc.frequency.setValueAtTime(650, audioCtx.currentTime);
+                sirenOsc.frequency.linearRampToValueAtTime(950, audioCtx.currentTime + 0.35);
+                gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
+                sirenOsc.connect(gain);
+                gain.connect(audioCtx.destination);
+                sirenOsc.start();
+                sirenPlaying = true;
+            } catch (e) {}
+        }
+
+        function stopSiren() {
+            if (sirenOsc) {
+                try { sirenOsc.stop(); } catch(e) {}
+                sirenOsc = null;
+            }
+            sirenPlaying = false;
+        }
+
+        // =========================================================================
+        // 4. LIVE STATUS & INCIDENT POLLER
+        // =========================================================================
+        let prevLiveThreats = new Set();
+
+        async function pollStatus() {
+            try {
+                let res = await fetch('/api/status');
+                let data = await res.json();
+
+                let banner = document.getElementById('alert-banner');
+                let alertText = document.getElementById('alert-text');
+
+                // Check live siren alert (exclusive to LIVE feeds)
+                if (data.live_siren_alert) {
+                    banner.style.display = 'block';
+                    alertText.innerText = data.live_threats.join(' • ');
+                    playSiren();
+
+                    // Check if any active live threat is a SERIOUS threat
+                    data.live_threats.forEach(threat => {
+                        let cfg = THREAT_CONFIG[threat];
+                        if (cfg && cfg.isSerious) {
+                            showEmergencyModal(threat, "Live Feed", new Date().toLocaleTimeString());
+                        }
+                    });
+                } else {
+                    banner.style.display = 'none';
+                    stopSiren();
+                }
+
+                // Update Camera Cards threat glowing borders
+                data.cameras.forEach(c => {
+                    let card = document.getElementById('card-' + c.id);
+                    if (card) {
+                        if (c.active_threats.length > 0) {
+                            card.classList.add('threat-active');
+                        } else {
+                            card.classList.remove('threat-active');
+                        }
+                    }
+                });
+
+                // Update 7 Threat Matrix Pills
+                let allActiveThreats = new Set();
+                data.cameras.forEach(c => {
+                    c.active_threats.forEach(t => allActiveThreats.add(t.toUpperCase()));
+                });
+
+                ['WEAPON', 'FIRE', 'SMOKE', 'FALL', 'VIOLENCE', 'THEFT', 'INTRUSION'].forEach(threat => {
+                    let pill = document.getElementById('pill-' + threat);
+                    if (pill) {
+                        if (allActiveThreats.has(threat)) {
+                            pill.classList.add('active');
+                            // If newly detected, trigger a toast notification
+                            if (!prevLiveThreats.has(threat)) {
+                                showToast(threat, "Surveillance Grid");
+                            }
+                        } else {
+                            pill.classList.remove('active');
+                        }
+                    }
+                });
+
+                prevLiveThreats = allActiveThreats;
+
+                // Fetch Incidents History
+                let incRes = await fetch('/api/incidents');
+                let incData = await incRes.json();
+                let tbody = document.getElementById('incident-tbody');
+                document.getElementById('log-count').innerText = `${incData.total} events recorded`;
+
+                if (incData.incidents.length > 0) {
+                    tbody.innerHTML = incData.incidents.slice(0, 40).map(inc => `
+                        <tr>
+                            <td>${inc.real_time.split(' ')[1]}</td>
+                            <td>${inc.camera_name.substring(0, 16)}</td>
+                            <td class="threat-tag">🚨 ${inc.threat}</td>
+                            <td>${inc.video_time}</td>
+                        </tr>
+                    `).join('');
+                }
+            } catch (err) {}
+        }
+
+        setInterval(pollStatus, 1000);
+
+        // =========================================================================
+        // 5. CAMERA SOURCE CONNECTORS
+        // =========================================================================
+        async function connectWebcam() {
+            let form = new FormData();
+            let camId = 'webcam_' + Date.now();
+            form.append('camera_id', camId);
+            form.append('name', 'Live Webcam Feed');
+            form.append('source', '0');
+            form.append('mode', 'live');
+
+            let res = await fetch('/api/add_camera', { method: 'POST', body: form });
+            if (res.ok) location.reload();
+            else alert('Failed to connect webcam. Ensure webcam is available.');
+        }
+
+        async function uploadVideoFile() {
+            let fileInput = document.getElementById('video-file-input');
+            if (!fileInput.files.length) return;
+
+            let file = fileInput.files[0];
+            let form = new FormData();
+            form.append('file', file);
+            form.append('name', file.name.substring(0, 20) + ' (Recorded)');
+
+            let res = await fetch('/api/upload_video', { method: 'POST', body: form });
+            if (res.ok) location.reload();
+            else alert('Failed to process uploaded video.');
+        }
+
+        async function connectRTSP() {
+            let url = document.getElementById('rtsp-url-input').value.trim();
+            if (!url) return;
+
+            let form = new FormData();
+            let camId = 'ipcam_' + Date.now();
+            form.append('camera_id', camId);
+            form.append('name', 'IP Camera (' + url.substring(0, 15) + ')');
+            form.append('source', url);
+            form.append('mode', 'live');
+
+            let res = await fetch('/api/add_camera', { method: 'POST', body: form });
+            if (res.ok) location.reload();
+            else alert('Failed to connect to IP camera.');
+        }
+
+        async function removeCamera(camId) {
+            await fetch('/api/remove_camera/' + camId, { method: 'DELETE' });
+            location.reload();
+        }
+    </script>
+</body>
+</html>
