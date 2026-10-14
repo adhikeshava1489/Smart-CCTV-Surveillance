@@ -21,6 +21,7 @@ Features:
 
 import os
 import sys
+import math
 from pathlib import Path
 from collections import deque
 import cv2
@@ -66,13 +67,17 @@ class UnifiedSurveillanceDetector:
             print("[PIPELINE] 'models/best.pt' not found. Using pre-trained 'yolov8n.pt'.")
             self.spatial_model = YOLO("yolov8n.pt")
 
+        # Dedicated person detection for intrusion monitoring (COCO class 0: person)
+        self.person_model = YOLO("yolov8n.pt")
+
         # 2. Load Temporal Action Classifier (Violence & Theft)
         action_path = BASE_DIR / action_weights
         self.action_model = None
+        self.action_classes = ["normal", "violence", "theft_or_intrusion"]
         if action_path.exists():
             print(f"[PIPELINE] Loading temporal action model: {action_path.name}")
-            ckpt = torch.load(str(action_path), map_location=self.device)
-            self.action_model = TemporalActionModel(num_classes=3).to(self.device)
+            ckpt = torch.load(str(action_path), map_location=self.device, weights_only=False)
+            self.action_model = TemporalActionModel(num_classes=3, pretrained=False).to(self.device)
             self.action_model.load_state_dict(ckpt["model_state"])
             self.action_model.eval()
             self.action_classes = ckpt.get("classes", ["normal", "violence", "theft_or_intrusion"])
@@ -101,12 +106,18 @@ class UnifiedSurveillanceDetector:
     def process_frame(self, frame):
         """Processes a single surveillance frame across all 7 threat checks."""
         h, w = frame.shape[:2]
+        raw_frame = frame.copy()  # Unannotated frame for ML models
         current_frame_threats = set()
         active_confirmed_threats = set()
 
         # --- A. Spatial Detection (YOLO: Weapon, Fire, Smoke, Fall) ---
         spatial_res = self.spatial_model.predict(source=frame, conf=self.conf_thresh, verbose=False)[0]
         person_boxes = []
+
+        # Detect people with person model (COCO class 0)
+        person_res = self.person_model.predict(source=raw_frame, conf=0.40, classes=[0], verbose=False)[0]
+        for pbox in person_res.boxes:
+            person_boxes.append(list(map(int, pbox.xyxy[0].tolist())))
 
         for box in spatial_res.boxes:
             cls_id = int(box.cls[0].item())
@@ -115,8 +126,8 @@ class UnifiedSurveillanceDetector:
 
             x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
 
-            # Check if person (used for intrusion monitoring)
-            if name in ["person", "fall"]:
+            # Fall is also considered a person state
+            if name == "fall":
                 person_boxes.append([x1, y1, x2, y2])
 
             if name in ["weapon", "fire", "smoke", "fall"]:
@@ -126,20 +137,23 @@ class UnifiedSurveillanceDetector:
                 # Draw bounding box
                 cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
                 tag = f"{name.upper()} {conf*100:.0f}%"
-                cv2.rectangle(frame, (x1, max(0, y1 - 22)), (x1 + len(tag)*10, y1), color, -1)
-                cv2.putText(frame, tag, (x1 + 3, max(16, y1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+                label_y = y1 - 6 if y1 >= 25 else y2 + 18
+                bg_top = y1 - 22 if y1 >= 25 else y2
+                bg_bottom = y1 if y1 >= 25 else y2 + 22
+                cv2.rectangle(frame, (x1, bg_top), (x1 + len(tag)*10, bg_bottom), color, -1)
+                cv2.putText(frame, tag, (x1 + 3, label_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
 
         # --- B. Intrusion & Perimeter Monitor ---
-        frame = self.zone_monitor.draw_zone(frame)
         is_intrusion, breached_pts = self.zone_monitor.check_intrusion(person_boxes, frame.shape)
         if is_intrusion:
             current_frame_threats.add("intrusion")
             for box, pt in breached_pts:
                 cv2.circle(frame, pt, 6, (0, 0, 255), -1)
                 cv2.putText(frame, "INTRUDER", (pt[0] - 25, pt[1] - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+        frame = self.zone_monitor.draw_zone(frame)
 
         # --- C. Temporal Action Recognition (Violence & Theft) ---
-        self.frame_buffer.append(self.preprocess_action_frame(frame))
+        self.frame_buffer.append(self.preprocess_action_frame(raw_frame))
 
         if self.action_model is not None and len(self.frame_buffer) == 16:
             seq_tensor = torch.tensor(np.array([list(self.frame_buffer)]), dtype=torch.float32).to(self.device)
@@ -155,14 +169,15 @@ class UnifiedSurveillanceDetector:
                 elif action_name == "theft_or_intrusion" and action_conf > 0.60:
                     current_frame_threats.add("theft")
 
-        # --- D. Temporal Debouncing (Anti-False-Alarm Filter) ---
+        # --- D. Temporal Debouncing (Anti-False-Alarm Filter with ceiling) ---
+        MAX_DEBOUNCE = 10
         for threat in self.debounce_tracker:
             if threat in current_frame_threats:
-                self.debounce_tracker[threat] += 1
-                if self.debounce_tracker[threat] >= self.CONFIRM_THRESHOLD:
-                    active_confirmed_threats.add(threat)
+                self.debounce_tracker[threat] = min(MAX_DEBOUNCE, self.debounce_tracker[threat] + 1)
             else:
                 self.debounce_tracker[threat] = max(0, self.debounce_tracker[threat] - 1)
+            if self.debounce_tracker[threat] >= self.CONFIRM_THRESHOLD:
+                active_confirmed_threats.add(threat)
 
         # --- E. Draw Top Surveillance Status HUD Header ---
         header_color = (0, 0, 180) if active_confirmed_threats else (0, 100, 0)
@@ -172,7 +187,7 @@ class UnifiedSurveillanceDetector:
 
         if active_confirmed_threats:
             threat_str = " | ".join(t.upper() for t in sorted(active_confirmed_threats))
-            hud_text = f"🚨 ALERT: THREAT DETECTED -> [{threat_str}]"
+            hud_text = f"[ALERT] THREAT DETECTED -> [{threat_str}]"
             text_color = (255, 255, 255)
         else:
             hud_text = "SURVEILLANCE ACTIVE | ALL 7 THREAT CHANNELS SECURE"
@@ -183,10 +198,11 @@ class UnifiedSurveillanceDetector:
         return frame, active_confirmed_threats
 
 
-def run_surveillance(source_path: str, max_frames: int = 300, conf: float = 0.35):
+def run_surveillance(source_path, max_frames: int = 300, conf: float = 0.35):
     """Processes any video or webcam feed with full 7-threat surveillance."""
     detector = UnifiedSurveillanceDetector(conf_thresh=conf)
-    cap = cv2.VideoCapture(int(source_path) if source_path.isdigit() else source_path)
+    is_cam = isinstance(source_path, int) or (isinstance(source_path, str) and str(source_path).isdigit())
+    cap = cv2.VideoCapture(int(source_path) if is_cam else str(source_path))
 
     if not cap.isOpened():
         print(f"[ERROR] Unable to open surveillance feed: {source_path}")
@@ -194,12 +210,24 @@ def run_surveillance(source_path: str, max_frames: int = 300, conf: float = 0.35
 
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+    fps_raw = cap.get(cv2.CAP_PROP_FPS)
+    fps = float(fps_raw) if fps_raw and not math.isnan(fps_raw) and fps_raw > 0 else 25.0
 
-    src_name = Path(source_path).stem if not source_path.isdigit() else "live_cctv"
+    if width <= 0 or height <= 0:
+        ret, test_frame = cap.read()
+        if ret:
+            height, width = test_frame.shape[:2]
+            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+        else:
+            width, height = 640, 480
+
+    src_name = "live_cctv" if is_cam else Path(str(source_path)).stem
     out_path = OUTPUTS_DIR / f"surveillance_{src_name}.mp4"
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     out = cv2.VideoWriter(str(out_path), fourcc, fps, (width, height))
+
+    if not out.isOpened():
+        print(f"[WARNING] VideoWriter could not be opened for {out_path}")
 
     print(f"\n[SURVEILLANCE] Streaming '{src_name}' ({width}x{height} @ {fps:.1f} FPS)...")
     frame_idx = 0
@@ -211,20 +239,22 @@ def run_surveillance(source_path: str, max_frames: int = 300, conf: float = 0.35
             break
 
         processed_frame, active_threats = detector.process_frame(frame)
-        out.write(processed_frame)
+        if out.isOpened():
+            out.write(processed_frame)
         frame_idx += 1
 
         if active_threats:
             for t in active_threats:
                 if t not in total_threats_logged:
-                    print(f"  🚨 [FRAME {frame_idx}] CONFIRMED THREAT: {t.upper()}")
+                    print(f"  [ALERT] [FRAME {frame_idx}] CONFIRMED THREAT: {t.upper()}")
                 total_threats_logged.add(t)
 
         if frame_idx % 50 == 0:
             print(f"  ... monitored {frame_idx} frames")
 
     cap.release()
-    out.release()
+    if out.isOpened():
+        out.release()
 
     print("\n" + "=" * 65)
     print(" SURVEILLANCE RUN FINISHED!")

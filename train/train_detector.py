@@ -52,7 +52,8 @@ def train(epochs: int = 15, imgsz: int = 640):
     )
 
     # 3. Copy best weights to models/best.pt
-    run_best = BASE_DIR / "runs" / "train" / "cctv_threat_detector" / "weights" / "best.pt"
+    best_path = getattr(getattr(model, "trainer", None), "best", None)
+    run_best = Path(best_path) if best_path and Path(best_path).exists() else BASE_DIR / "runs" / "train" / "cctv_threat_detector" / "weights" / "best.pt"
     if run_best.exists():
         shutil.copy2(run_best, FINAL_BEST_MODEL)
         print("\n" + "=" * 65)

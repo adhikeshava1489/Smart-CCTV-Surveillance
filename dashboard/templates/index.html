@@ -410,10 +410,27 @@
             // Example: fetch('/api/send_sms_alert', { method: 'POST', body: JSON.stringify({ threat: threatKey }) });
         }
 
+        // HTML Escaper for XSS prevention
+        function escapeHtml(str) {
+            if (!str) return '';
+            return String(str).replace(/[&<>"']/g, function(m) {
+                return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m];
+            });
+        }
+
+        // Auto-resume AudioContext on first user interaction
+        document.addEventListener('click', () => {
+            if (audioCtx && audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+        }, { once: true });
+
         // =========================================================================
         // 2. EMERGENCY MODAL CONTROLLER
         // =========================================================================
         function showEmergencyModal(threatKey, cameraName, timeStr) {
+            let modal = document.getElementById('serious-threat-modal');
+            if (modal.style.display === 'flex') return; // Do not thrash if already visible
             let now = Date.now();
             if (now - lastModalDismissTime < MODAL_COOLDOWN_MS) return;
 
@@ -430,7 +447,6 @@
             document.getElementById('modal-detail-time').innerText = timeStr || new Date().toLocaleTimeString();
             document.getElementById('modal-action-btn').innerText = config.actionText;
 
-            let modal = document.getElementById('serious-threat-modal');
             modal.style.display = 'flex';
 
             // Trigger hook
@@ -445,7 +461,7 @@
 
         function triggerSecurityDispatch() {
             let threat = document.getElementById('modal-detail-threat').innerText;
-            alert(`🚨 SECURITY DISPATCH CONFIRMED: Patrol dispatched for ${threat}.`);
+            alert(`SECURITY DISPATCH CONFIRMED: Patrol dispatched for ${threat}.`);
             dismissEmergencyModal();
         }
 
@@ -459,8 +475,8 @@
             toast.style.borderLeftColor = config.color;
             toast.innerHTML = `
                 <div>
-                    <div style="font-weight: 700; color: ${config.color};">${config.title}</div>
-                    <div style="font-size: 11px; color: var(--muted);">${cameraName} • ${new Date().toLocaleTimeString()}</div>
+                    <div style="font-weight: 700; color: ${config.color};">${escapeHtml(config.title)}</div>
+                    <div style="font-size: 11px; color: var(--muted);">${escapeHtml(cameraName)} • ${new Date().toLocaleTimeString()}</div>
                 </div>
                 <button onclick="this.parentElement.remove()" style="padding: 2px 6px; font-size: 10px; margin-left: 10px;">✕</button>
             `;
@@ -473,6 +489,7 @@
         // =========================================================================
         let audioCtx = null;
         let sirenOsc = null;
+        let sirenModTimer = null;
         let sirenEnabled = true;
         let sirenPlaying = false;
 
@@ -486,20 +503,36 @@
             if (!sirenEnabled || sirenPlaying) return;
             try {
                 if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                if (audioCtx.state === 'suspended') audioCtx.resume();
+
                 sirenOsc = audioCtx.createOscillator();
                 let gain = audioCtx.createGain();
                 sirenOsc.type = "sawtooth";
                 sirenOsc.frequency.setValueAtTime(650, audioCtx.currentTime);
-                sirenOsc.frequency.linearRampToValueAtTime(950, audioCtx.currentTime + 0.35);
                 gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
                 sirenOsc.connect(gain);
                 gain.connect(audioCtx.destination);
                 sirenOsc.start();
                 sirenPlaying = true;
-            } catch (e) {}
+
+                // Modulate between 650 Hz and 950 Hz for a realistic emergency wail
+                let high = false;
+                sirenModTimer = setInterval(() => {
+                    if (!sirenOsc || !audioCtx) return;
+                    let target = high ? 650 : 950;
+                    sirenOsc.frequency.linearRampToValueAtTime(target, audioCtx.currentTime + 0.3);
+                    high = !high;
+                }, 350);
+            } catch (e) {
+                console.error("[CCTV] Siren audio error:", e);
+            }
         }
 
         function stopSiren() {
+            if (sirenModTimer) {
+                clearInterval(sirenModTimer);
+                sirenModTimer = null;
+            }
             if (sirenOsc) {
                 try { sirenOsc.stop(); } catch(e) {}
                 sirenOsc = null;
@@ -511,8 +544,12 @@
         // 4. LIVE STATUS & INCIDENT POLLER
         // =========================================================================
         let prevLiveThreats = new Set();
+        let isPolling = false;
 
         async function pollStatus() {
+            if (isPolling) return;
+            isPolling = true;
+
             try {
                 let res = await fetch('/api/status');
                 let data = await res.json();
@@ -561,9 +598,11 @@
                     if (pill) {
                         if (allActiveThreats.has(threat)) {
                             pill.classList.add('active');
-                            // If newly detected, trigger a toast notification
+                            // If newly detected, trigger a toast notification with the specific camera name
                             if (!prevLiveThreats.has(threat)) {
-                                showToast(threat, "Surveillance Grid");
+                                let trigCam = data.cameras.find(c => c.active_threats.map(t => t.toUpperCase()).includes(threat));
+                                let camName = trigCam ? trigCam.name : "Surveillance Grid";
+                                showToast(threat, camName);
                             }
                         } else {
                             pill.classList.remove('active');
@@ -579,20 +618,27 @@
                 let tbody = document.getElementById('incident-tbody');
                 document.getElementById('log-count').innerText = `${incData.total} events recorded`;
 
-                if (incData.incidents.length > 0) {
+                if (incData.incidents && incData.incidents.length > 0) {
                     tbody.innerHTML = incData.incidents.slice(0, 40).map(inc => `
                         <tr>
-                            <td>${inc.real_time.split(' ')[1]}</td>
-                            <td>${inc.camera_name.substring(0, 16)}</td>
-                            <td class="threat-tag">🚨 ${inc.threat}</td>
-                            <td>${inc.video_time}</td>
+                            <td>${escapeHtml(inc.real_time.split(' ')[1] || inc.real_time)}</td>
+                            <td>${escapeHtml(inc.camera_name.substring(0, 16))}</td>
+                            <td class="threat-tag">[ALERT] ${escapeHtml(inc.threat)}</td>
+                            <td>${escapeHtml(inc.video_time)}</td>
                         </tr>
                     `).join('');
+                } else {
+                    tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--muted); padding: 18px;">No incidents logged yet.</td></tr>';
                 }
-            } catch (err) {}
+            } catch (err) {
+                console.error("[CCTV Dashboard] Polling error:", err);
+            } finally {
+                isPolling = false;
+                setTimeout(pollStatus, 1000);
+            }
         }
 
-        setInterval(pollStatus, 1000);
+        setTimeout(pollStatus, 1000);
 
         // =========================================================================
         // 5. CAMERA SOURCE CONNECTORS

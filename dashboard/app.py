@@ -5,15 +5,14 @@ Handles multi-camera streaming, real-time alerting, video file uploads,
 and timestamped incident logging.
 """
 
-import os
 import sys
+import time
 import csv
 import io
 import shutil
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, Form, Request, HTTPException
-from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse, Response
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse, StreamingResponse, Response
 from fastapi.templating import Jinja2Templates
 
 from contextlib import asynccontextmanager
@@ -38,6 +37,9 @@ def init_default_cameras():
     if sample_fight.exists():
         camera_manager.add_camera("cam_2", "Lobby Hallway (Recorded)", str(sample_fight), mode="recorded")
 
+    if not sample_burglary.exists() and not sample_fight.exists():
+        print("[INFO] Sample demonstration videos not found; starting with empty camera grid.")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -58,12 +60,15 @@ def index(request: Request):
     return templates.TemplateResponse(
         request=request,
         name="index.html",
-        context={"cameras": list(camera_manager.cameras.values())}
+        context={
+            "request": request,
+            "cameras": list(camera_manager.cameras.values())
+        }
     )
 
 
 def gen_frames(camera_id: str):
-    """Generator function for MJPEG video streaming."""
+    """Generator function for MJPEG video streaming with frame rate pacing."""
     cam = camera_manager.cameras.get(camera_id)
     if not cam:
         return
@@ -72,8 +77,8 @@ def gen_frames(camera_id: str):
         if frame_bytes is not None:
             yield (b'--frame\r\n'
                    b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+            time.sleep(0.033)  # Pace to ~30 FPS to eliminate CPU busy-wait
         else:
-            import time
             time.sleep(0.04)
 
 
@@ -100,13 +105,16 @@ def add_camera(
 
 
 @app.post("/api/upload_video")
-async def upload_video(file: UploadFile = File(...), name: str = Form("Uploaded Surveillance Video")):
-    """Uploads a user video file and immediately creates a RECORDED analysis feed."""
-    dest_path = UPLOADS_DIR / file.filename
+def upload_video(file: UploadFile = File(...), name: str = Form("Uploaded Surveillance Video")):
+    """Uploads a user video file and starts a RECORDED analysis feed (runs synchronously in threadpool)."""
+    # Sanitize filename against directory traversal
+    safe_filename = Path(file.filename).name
+    dest_path = UPLOADS_DIR / safe_filename
     with open(dest_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
-    cam_id = f"upload_{int(Path(file.filename).stem[:8] if len(Path(file.filename).stem) >= 8 else 'custom')}_{len(camera_manager.cameras)+1}"
+    safe_stem = "".join(c for c in Path(safe_filename).stem if c.isalnum())[:10] or "video"
+    cam_id = f"upload_{safe_stem}_{int(time.time())}"
     cam = camera_manager.add_camera(cam_id, name, str(dest_path), mode="recorded")
     if cam:
         return {"status": "success", "camera_id": cam_id, "name": name, "mode": "recorded"}
@@ -122,15 +130,17 @@ def remove_camera(camera_id: str):
 
 @app.get("/api/status")
 def get_status():
-    """Returns active cameras and active LIVE threats (for siren triggering)."""
+    """Returns active cameras and active LIVE threats (thread-safe snapshot)."""
     cams = []
-    for c in camera_manager.cameras.values():
+    for c in list(camera_manager.cameras.values()):
+        with c.lock:
+            active_threats = list(c.active_threats)
         cams.append({
             "id": c.camera_id,
             "name": c.name,
             "mode": c.mode,
             "is_running": c.is_running,
-            "active_threats": list(c.active_threats)
+            "active_threats": active_threats
         })
 
     live_threats = camera_manager.get_active_live_threats()

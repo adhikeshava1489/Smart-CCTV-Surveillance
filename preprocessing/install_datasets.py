@@ -145,7 +145,7 @@ def install_fire_smoke(num_samples: int = 600):
 
         print(f"  -> Downloading {len(tasks)//2} image-label pairs with parallel workers...")
         with ThreadPoolExecutor(max_workers=8) as ex:
-            futures = [ex.submit(download_stream, url, dest, 10) for url, dest in tasks]
+            futures = [ex.submit(download_stream, url, dest, 0 if dest.suffix == ".txt" else 10) for url, dest in tasks]
             for _ in as_completed(futures):
                 pass
         print("  -> Fire & Smoke installation complete.")
@@ -176,7 +176,7 @@ def install_falls():
 
         print(f"  -> Downloading {len(tasks)} fall image/label files...")
         with ThreadPoolExecutor(max_workers=8) as ex:
-            futures = [ex.submit(download_stream, url, dest, 10) for url, dest in tasks]
+            futures = [ex.submit(download_stream, url, dest, 0 if dest.suffix == ".txt" else 10) for url, dest in tasks]
             for _ in as_completed(futures):
                 pass
         print("  -> Person Fallen installation complete.")
@@ -197,7 +197,10 @@ def install_theft_and_violence():
 
     print("  -> Executing preprocessing/download_expanded_surveillance.py...")
     import subprocess
-    subprocess.run([sys.executable, str(BASE_DIR / "preprocessing" / "download_expanded_surveillance.py")], check=True)
+    try:
+        subprocess.run([sys.executable, str(BASE_DIR / "preprocessing" / "download_expanded_surveillance.py")], check=True)
+    except subprocess.CalledProcessError as e:
+        print(f"  [WARNING] Video download process exited with error: {e}")
 
 
 def main():
@@ -213,7 +216,7 @@ def main():
     print("\n")
     check_and_report_existing()
     print("\nDataset ready! You can verify integrity anytime by running:")
-    print("  python scripts/verify_dataset.py\n")
+    print("  python preprocessing/verify_dataset.py\n")
 
 
 if __name__ == "__main__":

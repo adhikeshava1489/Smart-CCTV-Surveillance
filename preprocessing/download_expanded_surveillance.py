@@ -79,7 +79,7 @@ def build_download_tasks():
                 print(f"  [OK] {cat_name}: Already has {len(existing_files)} files (target {target_count})")
                 continue
 
-            candidates = [f for f in ucf_files if f"/{cat_name}/" in f]
+            candidates = [f for f in ucf_files if f"/{cat_name}/" in f or f.startswith(f"{cat_name}/")]
             added = 0
             for rel in candidates:
                 fname = Path(rel).name
@@ -105,7 +105,7 @@ def build_download_tasks():
         existing_gf = {f.name for f in DIR_GODSEYE_FIGHTS.glob("*.*") if f.is_file()}
         needed_gf = 30 - len(existing_gf)
         if needed_gf > 0:
-            fight_cands = [f for f in gods_files if "Fight/" in f]
+            fight_cands = [f for f in gods_files if "Fight/" in f and "NonFight" not in f]
             added = 0
             for rel in fight_cands:
                 fname = Path(rel).name
@@ -141,7 +141,7 @@ def download_single_video(task):
     filename, url, dest_dir, cat_name = task
     dest = dest_dir / filename
 
-    if dest.exists() and dest.stat().st_size > 100000:
+    if dest.exists() and dest.stat().st_size > 50000:
         return True, filename, cat_name, dest.stat().st_size / (1024 * 1024), "Already Exists"
 
     tmp_dest = dest_dir / f"{filename}.part"

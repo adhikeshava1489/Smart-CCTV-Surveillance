@@ -56,35 +56,41 @@ class VideoDataset(Dataset):
 
     def extract_frames(self, video_path: str):
         cap = cv2.VideoCapture(video_path)
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        if total_frames <= 0:
-            total_frames = self.num_frames
+        if not cap.isOpened():
+            return np.zeros((self.num_frames, 3, 224, 224), dtype=np.float32)
+        try:
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            if total_frames <= 0:
+                total_frames = self.num_frames
 
-        # Uniform indices
-        indices = np.linspace(0, max(0, total_frames - 1), self.num_frames, dtype=int)
-        frames = []
-        current_idx = 0
+            # Uniform indices
+            indices = np.linspace(0, max(0, total_frames - 1), self.num_frames, dtype=int)
+            frames = []
+            last_valid = np.zeros((3, 224, 224), dtype=np.float32)
 
-        for target_idx in indices:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, target_idx)
-            ret, frame = cap.read()
-            if not ret or frame is None:
-                frame = np.zeros((224, 224, 3), dtype=np.uint8)
-            else:
+            for target_idx in indices:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, target_idx)
+                ret, frame = cap.read()
+                if not ret or frame is None:
+                    frames.append(last_valid)
+                    continue
+
                 frame = cv2.resize(frame, (224, 224))
                 frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-            # Normalize to [0, 1] then ImageNet standard
-            frame = frame.astype(np.float32) / 255.0
-            mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
-            std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
-            frame = (frame - mean) / std
-            # (H, W, C) -> (C, H, W)
-            frame = np.transpose(frame, (2, 0, 1))
-            frames.append(frame)
+                # Normalize to [0, 1] then ImageNet standard
+                frame = frame.astype(np.float32) / 255.0
+                mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+                std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+                frame = (frame - mean) / std
+                # (H, W, C) -> (C, H, W)
+                frame = np.transpose(frame, (2, 0, 1))
+                last_valid = frame
+                frames.append(frame)
 
-        cap.release()
-        return np.array(frames, dtype=np.float32)
+            return np.array(frames, dtype=np.float32)
+        finally:
+            cap.release()
 
     def __getitem__(self, idx):
         path, label = self.samples[idx]
@@ -97,9 +103,10 @@ class VideoDataset(Dataset):
 
 class TemporalActionModel(nn.Module):
     """Pre-trained MobileNetV2 + Temporal GRU Action Recognition Model."""
-    def __init__(self, num_classes: int = 3, hidden_dim: int = 128):
+    def __init__(self, num_classes: int = 3, hidden_dim: int = 128, pretrained: bool = True):
         super().__init__()
-        base = models.mobilenet_v2(weights=MobileNet_V2_Weights.DEFAULT)
+        weights = MobileNet_V2_Weights.DEFAULT if pretrained else None
+        base = models.mobilenet_v2(weights=weights)
         self.backbone = base.features
         self.pool = nn.AdaptiveAvgPool2d((1, 1))
 
@@ -118,13 +125,13 @@ class TemporalActionModel(nn.Module):
     def forward(self, x):
         # x shape: (B, T, C, H, W)
         B, T, C, H, W = x.shape
-        x = x.view(B * T, C, H, W)
+        x = x.reshape(B * T, C, H, W)
         feat = self.backbone(x)
         feat = self.pool(feat).flatten(1)  # (B*T, 1280)
-        feat = feat.view(B, T, 1280)
+        feat = feat.reshape(B, T, 1280)
 
         out, _ = self.gru(feat)            # (B, T, 2*hidden_dim)
-        last_out = out[:, -1, :]           # Take last temporal step
+        last_out = out.mean(dim=1)         # Temporal average pooling (correct for BiGRU)
         logits = self.classifier(last_out) # (B, num_classes)
         return logits
 
@@ -135,8 +142,14 @@ def train_action_model(epochs: int = 5, batch_size: int = 4, lr: float = 1e-3):
     print(" STAGE 3: VIDEO ACTION CLASSIFIER TRAINING (VIOLENCE & THEFT)")
     print("=" * 70)
 
+    if not MANIFEST_PATH.exists():
+        raise FileNotFoundError(f"[ERROR] Manifest not found at {MANIFEST_PATH}. Run 'python preprocessing/prepare_dataset.py' first.")
+
     train_ds = VideoDataset(MANIFEST_PATH, split="train", num_frames=16)
     val_ds = VideoDataset(MANIFEST_PATH, split="val", num_frames=16)
+
+    if len(train_ds) == 0 or len(val_ds) == 0:
+        raise ValueError(f"[ERROR] Video dataset is empty (train: {len(train_ds)}, val: {len(val_ds)}). Please verify raw video files exist.")
 
     print(f" Loaded {len(train_ds)} training videos and {len(val_ds)} validation videos.")
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=0)
@@ -150,6 +163,10 @@ def train_action_model(epochs: int = 5, batch_size: int = 4, lr: float = 1e-3):
 
     for epoch in range(1, epochs + 1):
         model.train()
+        # Keep frozen BatchNorm layers in eval mode to prevent stats drift
+        for m in model.backbone.modules():
+            if isinstance(m, nn.BatchNorm2d):
+                m.eval()
         total_loss, correct, total = 0.0, 0, 0
 
         for step, (inputs, targets) in enumerate(train_loader, 1):
@@ -184,7 +201,7 @@ def train_action_model(epochs: int = 5, batch_size: int = 4, lr: float = 1e-3):
         val_acc = (val_correct / val_total) * 100 if val_total > 0 else 0
         print(f"  -> Epoch {epoch} Results | Train Acc: {train_acc:.1f}% | Val Acc: {val_acc:.1f}%\n", flush=True)
 
-        if val_acc >= best_val_acc:
+        if val_acc > best_val_acc and val_acc > 0:
             best_val_acc = val_acc
             torch.save({
                 "model_state": model.state_dict(),
@@ -194,7 +211,10 @@ def train_action_model(epochs: int = 5, batch_size: int = 4, lr: float = 1e-3):
 
     print("=" * 70)
     print(f" TRAINING COMPLETE! Best Validation Accuracy: {best_val_acc:.1f}%")
-    print(f" Saved Model: {MODEL_SAVE_PATH} ({MODEL_SAVE_PATH.stat().st_size / (1024*1024):.2f} MB)")
+    if MODEL_SAVE_PATH.exists():
+        print(f" Saved Model: {MODEL_SAVE_PATH} ({MODEL_SAVE_PATH.stat().st_size / (1024*1024):.2f} MB)")
+    else:
+        print(f" [WARNING] No model saved (validation accuracy was 0%)")
     print("=" * 70 + "\n")
 
 
